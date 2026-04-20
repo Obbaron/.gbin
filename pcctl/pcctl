@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # pcctl - PC control utility for wake/shutdown of networked Linux machines
 # Usage: pcctl <command> [device]
+
 set -euo pipefail
 
 DEVICES_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/pcctl/devices"
@@ -133,6 +134,18 @@ cmd_reboot() {
     fi
 }
 
+cmd_init() {
+    if [[ -f "$DEVICES_FILE" ]]; then
+        fail "Devices file already exists: $DEVICES_FILE"
+    fi
+    mkdir -p "$(dirname "$DEVICES_FILE")"
+    cat > "$DEVICES_FILE" <<EOF
+# name        mac
+# desktop     AA:BB:CC:DD:EE:FF
+EOF
+    ok "Created $DEVICES_FILE"
+}
+
 usage() {
     cat <<EOF
 Usage: pcctl <command> [device] [options]
@@ -144,6 +157,7 @@ Commands:
   wait    <device>     Poll until a device comes online (post-wake)
   shutdown <device>    Shut down a device over SSH
   reboot  <device>     Reboot a device over SSH
+  init                 Create an example devices file
 
 Devices file: $DEVICES_FILE
   Format: <name>  <mac>
@@ -185,6 +199,9 @@ main() {
             ;;
         help|--help|-h)
             usage
+            ;;
+        init)
+            cmd_init
             ;;
         *)
             error "Unknown command: '${cmd}'"
