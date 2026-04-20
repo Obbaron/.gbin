@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# pcctl - PC control utility for wake/shutdown of networked Linux machines
+# Usage: pcctl <command> [device]
+set -euo pipefail
+
+DEVICES_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/pcctl/devices"
+declare -A DEVICES_MAC
+
+PING_TIMEOUT=2
+SSH_TIMEOUT=5
+WAIT_TIMEOUT=60
+WAIT_INTERVAL=3
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+info()  { printf "%b\n" "${CYAN}${BOLD}[INFO]${NC}  $*"; }
+ok()    { printf "%b\n" "${GREEN}${BOLD}[ OK ]${NC}  $*"; }
+warn()  { printf "%b\n" "${YELLOW}${BOLD}[WARN]${NC}  $*"; }
+error() { printf "%b\n" "${RED}${BOLD}[ERR!]${NC}  $*" >&2; }
+fail()  { error "$*"; exit 1; }
+
+load_devices() {
+    [[ -f "$DEVICES_FILE" ]] || fail "Devices file not found: $DEVICES_FILE"
+    while read -r name mac; do
+        [[ -z "$name" || "$name" =~ ^# ]] && continue
+        DEVICES_MAC["$name"]="$mac"
+    done < "$DEVICES_FILE"
+}
+
+get_mac() {
+    local name="$1"
+    [[ -n "${DEVICES_MAC[$name]:-}" ]] || fail "Unknown device: $name"
+    echo "${DEVICES_MAC[$name]}"
+}
+
+is_online() {
+    local host="$1"
+    tailscale ping --timeout="${PING_TIMEOUT}s" -c 1 "$host" &>/dev/null
+}
+
+list_devices() {
+    local fast="${1:-}"
+    printf "${BOLD}%-15s %-20s %s${NC}\n" "NAME" "MAC" "STATUS"
+    printf "%-15s %-20s %s\n" "----" "---" "------"
+    for name in $(printf '%s\n' "${!DEVICES_MAC[@]}" | sort); do
+        local status
+        if [[ "$fast" == "--fast" ]]; then
+            status="${YELLOW}?${NC}"
+        elif is_online "$name"; then
+            status="${GREEN}online${NC}"
+        else
+            status="${RED}offline${NC}"
+        fi
+        printf "${BOLD}%-15s${NC} %-20s %b\n" \
+            "$name" \
+            "${DEVICES_MAC[$name]}" \
+            "$status"
+    done
+}
+
+cmd_status() {
+    local name="$1"
+    if is_online "$name"; then
+        ok "$name is ONLINE"
+    else
+        warn "$name is OFFLINE"
+    fi
+}
+
+cmd_wake() {
+    local name="$1"
+    local mac
+    mac="$(get_mac "$name")"
+    if is_online "$name"; then
+        fail "$name is already online"
+    fi
+    info "Sending Wake-on-LAN to $name ($mac)"
+    if command -v wakeonlan &>/dev/null; then
+        wakeonlan "$mac"
+    elif command -v wol &>/dev/null; then
+        wol "$mac"
+    elif command -v etherwake &>/dev/null; then
+        sudo etherwake "$mac"
+    else
+        fail "No Wake-on-LAN tool found (install 'wol' or 'etherwake')"
+    fi
+    ok "Wake signal sent to $name"
+}
+
+cmd_wait() {
+    local name="$1"
+    local elapsed=0
+    info "Waiting for $name to come online (timeout: ${WAIT_TIMEOUT}s)..."
+    while true; do
+        if (( elapsed >= WAIT_TIMEOUT )); then
+            fail "$name did not come online within ${WAIT_TIMEOUT}s"
+        fi
+        is_online "$name" && break
+        sleep "$WAIT_INTERVAL"
+        (( elapsed += WAIT_INTERVAL ))
+    done
+    ok "$name is online (after ${elapsed}s)"
+}
+
+cmd_shutdown() {
+    local name="$1"
+    if ! is_online "$name"; then
+        fail "$name is already offline"
+    fi
+    info "Shutting down $name"
+    if ssh -o ConnectTimeout="$SSH_TIMEOUT" "$name" "sudo shutdown now"; then
+        ok "$name shutdown command sent"
+    else
+        fail "Failed to shut down $name — check SSH access and passwordless sudo for 'shutdown'"
+    fi
+}
+
+cmd_reboot() {
+    local name="$1"
+    if ! is_online "$name"; then
+        fail "$name is offline — cannot reboot"
+    fi
+    info "Rebooting $name"
+    if ssh -o ConnectTimeout="$SSH_TIMEOUT" "$name" "sudo reboot"; then
+        ok "$name reboot command sent"
+    else
+        fail "Failed to reboot $name — check SSH access and passwordless sudo for 'reboot'"
+    fi
+}
+
+usage() {
+    cat <<EOF
+Usage: pcctl <command> [device] [options]
+
+Commands:
+  list [--fast]        List all devices (--fast skips online check)
+  status  <device>     Show whether a device is online
+  wake    <device>     Send a Wake-on-LAN magic packet
+  wait    <device>     Poll until a device comes online (post-wake)
+  shutdown <device>    Shut down a device over SSH
+  reboot  <device>     Reboot a device over SSH
+
+Devices file: $DEVICES_FILE
+  Format: <name>  <mac>
+  (name must match the MagicDNS hostname on your tailnet)
+EOF
+}
+
+main() {
+    local cmd="${1:-}"
+    case "$cmd" in
+        wake)
+            [[ -n "${2:-}" ]] || fail "Usage: pcctl wake <device>"
+            load_devices
+            cmd_wake "$2"
+            ;;
+        wait)
+            [[ -n "${2:-}" ]] || fail "Usage: pcctl wait <device>"
+            load_devices
+            cmd_wait "$2"
+            ;;
+        shutdown|poweroff)
+            [[ -n "${2:-}" ]] || fail "Usage: pcctl shutdown <device>"
+            load_devices
+            cmd_shutdown "$2"
+            ;;
+        reboot)
+            [[ -n "${2:-}" ]] || fail "Usage: pcctl reboot <device>"
+            load_devices
+            cmd_reboot "$2"
+            ;;
+        status)
+            [[ -n "${2:-}" ]] || fail "Usage: pcctl status <device>"
+            load_devices
+            cmd_status "$2"
+            ;;
+        list)
+            load_devices
+            list_devices "${2:-}"
+            ;;
+        help|--help|-h)
+            usage
+            ;;
+        *)
+            error "Unknown command: '${cmd}'"
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
