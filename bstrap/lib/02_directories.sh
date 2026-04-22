@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # lib/02_directories.sh
 
 if [ -z "${SCRIPT_DIR:-}" ]; then
