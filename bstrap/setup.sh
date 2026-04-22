@@ -1,36 +1,116 @@
 #!/usr/bin/env sh
+# setup.sh - Sets up bstrap
 
-SELF_DELETE=true
-while [ "${1#-}" != "$1" ]; do
-  case "$1" in
-    -k|--keep) SELF_DELETE=false ;;
-    *) echo "Unknown flag: $1" >&2; exit 1 ;;
+GIT_REPO_DEFAULT="https://github.com/Obbaron/.gbin.git"
+BRANCH_DEFAULT="main"
+BSTRAP_DIR_DEFAULT="bstrap"
+
+download_file() {
+  url="$1"
+  output="$2"
+  tmp="${output}.tmp"
+  trap 'rm -f "$tmp"' INT TERM HUP
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL \
+      --retry 3 \
+      --retry-delay 1 \
+      --retry-connrefused \
+      "$url" -o "$tmp" || { rm -f "$tmp"; return 1; }
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q \
+      --tries=3 \
+      --wait=1 \
+      -O "$tmp" "$url" || { rm -f "$tmp"; return 1; }
+  else
+    echo "Error: neither curl nor wget installed" >&2
+    return 1
+  fi
+  mv -f "$tmp" "$output"
+  trap - INT TERM HUP
+}
+
+normalize_github_url() {
+  repo="$1"
+  case "$repo" in
+    git@github.com:*)
+      repo="${repo#git@github.com:}"
+      repo="https://github.com/${repo}"
+      ;;
   esac
-  shift
-done
+  repo="${repo%/}"
+  repo="${repo#http://github.com/}"
+  repo="${repo#https://github.com/}"
+  repo="https://raw.githubusercontent.com/${repo}"
+  repo="${repo%.git}"
+  printf '%s\n' "$repo"
+}
 
-FILE_NAME="bstrap"
+require_arg() {
+  [ -z "$2" ] && { echo "Error: $1 requires a value" >&2; exit 1; }
+}
 
-mkdir -p "${1:-$HOME/.local/bin/bstrap}"
-DIR_NAME=$(cd "${1:-$HOME/.local/bin/bstrap}" && pwd)
-echo "Created directory: $DIR_NAME"
+main() {
+  SELF_DELETE=true
+  FORCE=false
 
-if command -v curl >/dev/null 2>&1; then
-  DOWNLOAD="curl -fsL"
-  OUTPUT="-o"
-elif command -v wget >/dev/null 2>&1; then
-  DOWNLOAD="wget -q"
-  OUTPUT="-O"
-else
-  echo "Error: Cannot bootstrap without curl or wget" >&2
-  exit 1
-fi
+  while [ "${1#-}" != "$1" ]; do
+    case "$1" in
+      -k|--keep)   SELF_DELETE=false ;;
+      -f|--force)  FORCE=true ;;
+      -r|--repo)   shift; require_arg "--repo" "$1";   GIT_REPO="$1" ;;
+      -b|--branch) shift; require_arg "--branch" "$1"; BRANCH="$1" ;;
+      -d|--dir)    shift; require_arg "--dir" "$1";    BSTRAP_DIR="$1" ;;
+      *) echo "Unknown flag: $1" >&2; exit 1 ;;
+    esac
+    shift
+  done
 
-touch "$DIR_NAME/$FILE_NAME"
-chmod +x "$DIR_NAME/$FILE_NAME"
-echo "Created file: $DIR_NAME/$FILE_NAME"
+  GIT_REPO="${GIT_REPO:-$GIT_REPO_DEFAULT}"
+  BRANCH="${BRANCH:-$BRANCH_DEFAULT}"
+  BSTRAP_DIR="${BSTRAP_DIR:-$BSTRAP_DIR_DEFAULT}"
 
-if [ "$SELF_DELETE" = true ]; then
-  echo "Deleting script: $0"
-  rm -- "$0"
-fi
+  RAW_URL=$(normalize_github_url "$GIT_REPO")
+  RAW_URL="${RAW_URL}/${BRANCH}${BSTRAP_DIR:+/${BSTRAP_DIR}}"
+  TARGET_DIR="${1:-$HOME/.local/bin/bstrap}"
+
+  mkdir -p "$TARGET_DIR"
+  DIR_NAME=$(
+    cd "$TARGET_DIR" || exit 1
+    pwd
+  )
+
+  echo "Directory: $DIR_NAME"
+
+  LIB_DIR="$DIR_NAME/lib"
+  mkdir -p "$LIB_DIR"
+
+  FILES="bstrap
+lib/helpers.sh
+lib/01_packages.sh
+lib/02_directories.sh
+lib/03_permissions.sh
+lib/04_services.sh
+lib/05_dotfiles.sh
+lib/06_fonts.sh"
+
+  for file in $FILES; do
+    target="$DIR_NAME/$file"
+    if [ "$FORCE" = true ] || [ ! -f "$target" ]; then
+      echo "Downloading $file..."
+      download_file "${RAW_URL}/${file}" "$target" || {
+        echo "Error: failed to download $file" >&2
+        exit 1
+      }
+      chmod +x "$target"
+    else
+      echo "Skipping $file (already exists)"
+    fi
+  done
+
+  if [ "$SELF_DELETE" = true ]; then
+    echo "Deleting script: $0"
+    rm -- "$0"
+  fi
+}
+
+main "$@"
