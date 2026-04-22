@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # lib/05_dotfiles.sh
 #
 # Usage: 05_dotfiles.sh [-c|--copy] <src:dst ...>
