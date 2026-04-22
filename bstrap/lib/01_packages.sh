@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # lib/01_packages.sh
 
 PKG_MANAGER="${PKG_MANAGER:-}"
