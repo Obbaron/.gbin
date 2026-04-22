@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # lib/03_permissions.sh
 
 if [ -z "${SCRIPT_DIR:-}" ]; then
