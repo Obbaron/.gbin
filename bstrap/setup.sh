@@ -49,18 +49,42 @@ require_arg() {
   [ -z "$2" ] && { echo "Error: $1 requires a value" >&2; exit 1; }
 }
 
+usage() {
+  cat << EOF
+Usage: $(basename "$0") [flags] [target-dir]
+
+Flags:
+  -h, --help              Show this help message
+  -k, --keep              Do not delete this script after running
+  -f, --force             Overwrite existing files (excludes bstrap.yaml)
+  -r, --repo <url>        GitHub repo URL (default: $GIT_REPO_DEFAULT)
+  -b, --branch <name>     Branch to use (default: $BRANCH_DEFAULT)
+  -d, --dir <name>        Subdirectory within repo (default: $BSTRAP_DIR_DEFAULT)
+  --                      End of flags
+
+Examples:
+  $(basename "$0")
+  $(basename "$0") /custom/path
+  $(basename "$0") --repo https://github.com/user/repo.git
+  $(basename "$0") -r git@github.com:user/repo.git -b dev -d tools -k /custom/path
+  $(basename "$0") -- --unusual-dirname
+EOF
+}
+
 main() {
   SELF_DELETE=true
   FORCE=false
 
   while [ "${1#-}" != "$1" ]; do
     case "$1" in
+      -h|--help)   usage; exit 0 ;;
       -k|--keep)   SELF_DELETE=false ;;
       -f|--force)  FORCE=true ;;
       -r|--repo)   shift; require_arg "--repo" "$1";   GIT_REPO="$1" ;;
       -b|--branch) shift; require_arg "--branch" "$1"; BRANCH="$1" ;;
       -d|--dir)    shift; require_arg "--dir" "$1";    BSTRAP_DIR="$1" ;;
-      *) echo "Unknown flag: $1" >&2; exit 1 ;;
+      --)          shift; break ;;
+      *)           echo "Unknown flag: $1" >&2; exit 1 ;;
     esac
     shift
   done
@@ -106,6 +130,19 @@ lib/06_fonts.sh"
       echo "Skipping $file (already exists)"
     fi
   done
+
+  CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+  CONFIG_FILE="$CONFIG_DIR/bstrap.yaml"
+
+  if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Downloading bstrap.yaml..."
+    download_file "${RAW_URL}/bstrap.yaml" "$CONFIG_FILE" || {
+      echo "Error: failed to download bstrap.yaml" >&2
+      exit 1
+    }
+  else
+    echo "Skipping bstrap.yaml (already exists)"
+  fi
 
   if [ "$SELF_DELETE" = true ]; then
     echo "Deleting script: $0"
