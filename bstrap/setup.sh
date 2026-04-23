@@ -92,11 +92,15 @@ main() {
   GIT_REPO="${GIT_REPO:-$GIT_REPO_DEFAULT}"
   BRANCH="${BRANCH:-$BRANCH_DEFAULT}"
   BSTRAP_DIR="${BSTRAP_DIR:-$BSTRAP_DIR_DEFAULT}"
-
   RAW_URL=$(normalize_github_url "$GIT_REPO")
   RAW_URL="${RAW_URL}/${BRANCH}${BSTRAP_DIR:+/${BSTRAP_DIR}}"
+  
   TARGET_DIR="${1:-$HOME/.local/bin/bstrap}"
-
+  
+  if [ -e "$TARGET_DIR" ] && [ ! -d "$TARGET_DIR" ]; then
+    echo "Error: $TARGET_DIR exists but is not a directory" >&2
+    exit 1
+  fi
   mkdir -p "$TARGET_DIR"
   DIR_NAME=$(
     cd "$TARGET_DIR" || exit 1
