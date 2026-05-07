@@ -19,10 +19,10 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-info()  { printf "%b\n" "${CYAN}${BOLD}[INFO]${NC}  $*"; }
-ok()    { printf "%b\n" "${GREEN}${BOLD}[ OK ]${NC}  $*"; }
-warn()  { printf "%b\n" "${YELLOW}${BOLD}[WARN]${NC}  $*"; }
-error() { printf "%b\n" "${RED}${BOLD}[ERR!]${NC}  $*" >&2; }
+info()  { printf '%b\n' "${CYAN}${BOLD}[INFO]${NC}  $*"; }
+ok()    { printf '%b\n' "${GREEN}${BOLD}[ OK ]${NC}  $*"; }
+warn()  { printf '%b\n' "${YELLOW}${BOLD}[WARN]${NC}  $*"; }
+error() { printf '%b\n' "${RED}${BOLD}[ERR!]${NC}  $*" >&2; }
 fail()  { error "$*"; exit 1; }
 
 load_devices() {
@@ -46,8 +46,11 @@ is_online() {
 
 list_devices() {
     local fast="${1:-}"
-    printf "${BOLD}%-15s %-20s %s${NC}\n" "NAME" "MAC" "STATUS"
-    printf "%-15s %-20s %s\n" "----" "---" "------"
+    printf '%b%-15s%b %b%-20s%b %b%s%b\n' \
+        "$BOLD" "NAME" "$NC" \
+        "$BOLD" "MAC" "$NC" \
+        "$BOLD" "STATUS" "$NC"
+    printf '%-15s %-20s %s\n' "----" "---" "------"
     for name in $(printf '%s\n' "${!DEVICES_MAC[@]}" | sort); do
         local status
         if [[ "$fast" == "--fast" ]]; then
@@ -57,8 +60,8 @@ list_devices() {
         else
             status="${RED}offline${NC}"
         fi
-        printf "${BOLD}%-15s${NC} %-20s %b\n" \
-            "$name" \
+        printf '%b%-15s%b %-20s %b\n' \
+            "$BOLD" "$name" "$NC" \
             "${DEVICES_MAC[$name]}" \
             "$status"
     done
@@ -114,11 +117,17 @@ cmd_shutdown() {
         fail "$name is already offline"
     fi
     info "Shutting down $name"
-    if ssh -o ConnectTimeout="$SSH_TIMEOUT" "$name" "sudo shutdown now"; then
-        ok "$name shutdown command sent"
-    else
-        fail "Failed to shut down $name — check SSH access and passwordless sudo for 'shutdown'"
-    fi
+    ssh -o ConnectTimeout="$SSH_TIMEOUT" "$name" "sudo shutdown now" 2>/dev/null || true
+    info "Waiting for $name to go offline..."
+    local elapsed=0
+    while is_online "$name"; do
+        if (( elapsed >= WAIT_TIMEOUT )); then
+            fail "$name is still online after ${WAIT_TIMEOUT}s — shutdown may have failed"
+        fi
+        sleep "$WAIT_INTERVAL"
+        (( elapsed += WAIT_INTERVAL ))
+    done
+    ok "$name is offline (after ${elapsed}s)"
 }
 
 cmd_reboot() {
@@ -127,11 +136,26 @@ cmd_reboot() {
         fail "$name is offline — cannot reboot"
     fi
     info "Rebooting $name"
-    if ssh -o ConnectTimeout="$SSH_TIMEOUT" "$name" "sudo reboot"; then
-        ok "$name reboot command sent"
-    else
-        fail "Failed to reboot $name — check SSH access and passwordless sudo for 'reboot'"
-    fi
+    ssh -o ConnectTimeout="$SSH_TIMEOUT" "$name" "sudo reboot" 2>/dev/null || true
+    info "Waiting for $name to go offline..."
+    local elapsed=0
+    while is_online "$name"; do
+        if (( elapsed >= WAIT_TIMEOUT )); then
+            fail "$name never went offline — reboot may have failed"
+        fi
+        sleep "$WAIT_INTERVAL"
+        (( elapsed += WAIT_INTERVAL ))
+    done
+    info "$name is offline, waiting for it to come back..."
+    elapsed=0
+    while ! is_online "$name"; do
+        if (( elapsed >= WAIT_TIMEOUT )); then
+            fail "$name did not come back online within ${WAIT_TIMEOUT}s"
+        fi
+        sleep "$WAIT_INTERVAL"
+        (( elapsed += WAIT_INTERVAL ))
+    done
+    ok "$name is back online"
 }
 
 cmd_init() {
